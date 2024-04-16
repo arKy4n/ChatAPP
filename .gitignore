@@ -1,1 +1,4 @@
 venv
+__pycache__
+dummy_client
+dummy_server
