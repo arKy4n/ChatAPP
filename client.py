@@ -1,97 +1,113 @@
 import socket
 import threading
-import CONSTANTS
+import json
+
+# Connection Parameters
+HOST = "127.0.0.1"
+PORT = 55555
+ADDR = (HOST, PORT)
+
+HEADER_SIZE = 64
+FORMAT = "utf-8"
+
+# Connecting to Server
+client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+client.connect(ADDR)
+
+# Handling connection closing
+lock = threading.Lock()
+connected = True
 
 # Choosing NICKNAME
 nickname = input("Choose your NICKNAME: ")
 
-# Connecting to Server
-client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-client.connect(CONSTANTS.ADDR)
 
 # Send a message to a client with a prefixed header indicating the message length.
 def send_message(message):
-    """
-    Args:
-        message (str): The message to send.
+    try:
+        if connected:
+            msg_length = str(len(message))
+            msg_length = " " * (HEADER_SIZE - len(msg_length)) + msg_length
+            client.send(msg_length.encode(FORMAT))
+            client.send(message.encode(FORMAT))
+    except Exception as e:
+        print(f"Error occured in send_message(): {e}")
 
-    Explanation:
-        The function first calculates the length of the message and formats it
-        to ensure it takes up `CONSTANTS.HEADER_SIZE` bytes. This length is then
-        prefixed to the message to indicate the total message size. The formatted
-        length and the message are then sent to the client using the specified
-        encoding format from CONSTANTS.FORMAT.
-
-    """
-    msg_length = str(len(message))
-    msg_length = ' ' * (CONSTANTS.HEADER_SIZE - len(msg_length)) + msg_length
-    client.send(msg_length.encode(CONSTANTS.FORMAT))
-    client.send(message.encode(CONSTANTS.FORMAT))
 
 # Receive a message from a client by first reading the prefixed header for message length.
 def receive_message():
-    """
-    Returns:
-        str: The received message.
+    try:
+        with lock:
+            if connected:
+                msg_length = client.recv(HEADER_SIZE).decode(FORMAT)
+                if msg_length:
+                    msg_length = int(msg_length)
+                    message = client.recv(msg_length).decode(FORMAT)
+                    return message
+    except Exception as e:
+        print(f"Error occured in receive_message(): {e}")
 
-    Explanation:
-        The function first receives a header of length `CONSTANTS.HEADER_SIZE` bytes
-        to determine the length of the incoming message. Once the length is determined,
-        it reads that number of bytes to receive the complete message. The received
-        message is then decoded using the specified encoding format from CONSTANTS.FORMAT
-        and returned.
 
-    """
-    msg_length = client.recv(CONSTANTS.HEADER_SIZE).decode(CONSTANTS.FORMAT)
-    if msg_length:
-        msg_length = int(msg_length)
-        message = client.recv(msg_length).decode(CONSTANTS.FORMAT)
-        return message
+def is_json(message):
+    try:
+        json.loads(message)
+        return True
+    except:
+        return False
+
 
 # Receive and process messages from the server until the connection is closed or an error occurs.
 def receive():
-    """
-    Explanation:
-        The function enters a loop to continuously receive messages from the client using the
-        `receive_message` function. If the received message is "NICKNAME", the function sends
-        the nickname of the client back to the server using the `send_message` function. Otherwise,
-        it prints the received message to the console. If an exception occurs during the
-        communication process, the client socket is closed, an error message is printed, and
-        the loop is terminated.
-
-    """
-    CONNECTED = True
-    while CONNECTED:
-        try: 
+    global connected
+    try:
+        while connected:
             message = receive_message()
-            if message == "NICKNAME":
-                send_message(nickname)
+            if is_json(message) == False:
+                if message == "NICKNAME":
+                    send_message(nickname)
+                elif message == None:
+                    continue
+                else:
+                    print(message)
             else:
-                print(message)
-        except Exception as e:
-            print(f"Some error occured during the session: {e}")
+                response = json.loads(message)
+                sender = response["from"]
+                message = response["message"]
+                print(f"{sender}: {message}")
+    except Exception as e:
+        print(f"Some error occured during the receive session: {e}")
+    finally:
+        with lock:
             client.close()
-            CONNECTED = False
+            connected = False
+            # print("Connection ended or lost!")
+
 
 # Allow the client to input messages to send to the server.
 def write():
-    """
-    Explanation:
-        The function enters a loop to continuously prompt the user for input using the `input("")` function.
-        It constructs a message by appending the client's nickname to the input and sends this message
-        to the server using the `send_message` function. If an exception occurs during the communication
-        process, the client socket is closed, an error message is printed, and the loop is terminated.
-
-    """
-    CONNECTED = True
-    while CONNECTED:
-        try:
-            message = f"{nickname}: {input("")}"
+    global connected
+    try:
+        while connected:
+            message = input()
+            if message == "!quit":
+                send_message(message)
+                break
+            message = json.dumps(
+                {
+                    "to": "all",
+                    "from": nickname,
+                    "message": message,
+                }
+            )
             send_message(message)
-        except Exception as e:
-            print(f"Some error occured during the session: {e}")
+    except Exception as e:
+        print(f"Some error occured during the write session: {e}")
+    finally:
+        with lock:
             client.close()
-            CONNECTED = False
+            connected = False
+            # print("Connection ended or lost!")
+
 
 # Start Handling Thread For receive function.
 receive_thread = threading.Thread(target=receive)
@@ -100,3 +116,7 @@ receive_thread.start()
 # Start Handling Thread For write function.
 write_thread = threading.Thread(target=write)
 write_thread.start()
+
+# Waiting for receive and write thread to complete
+receive_thread.join()
+write_thread.join()
